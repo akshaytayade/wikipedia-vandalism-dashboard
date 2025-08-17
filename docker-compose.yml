@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  ingestion-service:
+    build:
+      context: .  # Use the project root as the build context
+      dockerfile: ./services/ingestion/Dockerfile
+    container_name: ingestion-service
+    environment:
+      # This environment variable is read by your shared logging config
+      - SERVICE_NAME=ingestion
+    logging:
+      # Send this container's logs to the fluentd driver
+      driver: "fluentd"
+      options:
+        # The address of the fluentd service (defined in the other compose file)
+        fluentd-address: localhost:24224
+        # The tag helps fluentd route the logs
+        tag: service.ingestion
+    networks:
+      - default # Ensures it can connect to services in the other compose file
+
+  # Example of how you would add another service
+  # api-service:
+  #   build:
+  #     context: .
+  #     dockerfile: ./services/api/Dockerfile
+  #   container_name: api-service
+  #   environment:
+  #     - SERVICE_NAME=api
+  #   logging:
+  #     driver: "fluentd"
+  #     options:
+  #       fluentd-address: localhost:24224
+  #       tag: service.api
+  #   networks:
+  #     - default
