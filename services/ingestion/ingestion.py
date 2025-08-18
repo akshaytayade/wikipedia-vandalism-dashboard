@@ -37,28 +37,46 @@ def create_kafka_producer():
         value_serializer=lambda v: json.dumps(v).encode('utf-8')
     )
 
+# In services/ingestion/ingest.py
+
 def main():
     """
     Connects to the Wikimedia stream and pushes events to Kafka.
     """
-    producer = create_kafka_producer()
-    client = get_wikimedia_stream_client()
+    logging.info("Script execution started.")
+    
+    # --- TRACER 1: KAFKA PRODUCER ---
+    logging.info("Attempting to create Kafka producer...")
+    try:
+        producer = create_kafka_producer()
+        logging.info("Kafka producer created successfully.")
+    except Exception as e:
+        logging.error(f"Failed to create Kafka producer: {e}", exc_info=True)
+        return # Exit if we can't create the producer
 
-    logging.info("Starting ingestion service...")
-    # The SSEClient object is the iterator itself.
+    # --- TRACER 2: WIKIMEDIA CLIENT ---
+    logging.info("Attempting to create Wikimedia stream client...")
+    try:
+        client = get_wikimedia_stream_client()
+        logging.info("Wikimedia stream client created successfully.")
+    except Exception as e:
+        logging.error(f"Failed to create Wikimedia stream client: {e}", exc_info=True)
+        return # Exit if we can't create the client
+
+    # --- TRACER 3: EVENT LOOP ---
+    logging.info("Initialization complete. Starting event loop...")
     for event in client:
         if event.event == 'message':
             try:
+                logging.debug(f"Received message data: {event.data}")
                 change = json.loads(event.data)
-                # We only care about actual edits to the main namespace
                 if change.get('type') == 'edit' and change.get('namespace') == 0:
-                    print(f"Publishing edit for page: {change.get('title')}")
+                    logging.info(f"Publishing edit for page: {change.get('title')}")
                     producer.send(KAFKA_TOPIC, change)
             except json.JSONDecodeError:
-                # This can happen if the stream sends a non-JSON message (e.g., a comment or empty line)
-                pass # It's safe to ignore these in this case
+                logging.warning(f"Could not decode JSON: {event.data}")
             except Exception as e:
-                print(f"An error occurred: {e}")
-
+                logging.error(f"An unhandled error occurred: {e}", exc_info=True)
+                
 if __name__ == "__main__":
     main()

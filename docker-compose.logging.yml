@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   fluentd:
     image: fluent/fluentd:v1.16-1
@@ -9,8 +7,8 @@ services:
       - ./fluentd/conf:/fluentd/etc
     ports:
       # This is the port your services will send logs to
-      - "24224:24224"
-      - "24224:24224/udp"
+      - "24225:24225"
+      - "24225:24225/udp"
     networks:
       - logging-net
 

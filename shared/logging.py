@@ -29,7 +29,7 @@ class JsonFormatter(logging.Formatter):
 def setup_logging():
     """Configures the root logger for JSON output. This is now reusable."""
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     
     if logger.hasHandlers():
         logger.handlers.clear()
