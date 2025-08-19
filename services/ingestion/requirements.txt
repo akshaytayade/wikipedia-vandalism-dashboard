@@ -1,3 +1,5 @@
-kafka-python
-sseclient-py
 requests
+sseclient-py
+elasticsearch>=8.0.0
+# Optional if you want Kafka
+# kafka-python

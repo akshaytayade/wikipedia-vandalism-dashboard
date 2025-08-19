@@ -1,82 +1,101 @@
-# /services/ingestion/ingest.py
 import json
 import sseclient
 import requests
 from kafka import KafkaProducer
-from shared.logging import setup_logging
+from datetime import datetime
 import logging
+from elasticsearch import Elasticsearch
 
 # Configuration
 KAFKA_BROKER = 'kafka:9092'
 KAFKA_TOPIC = 'raw_edits'
 WIKIMEDIA_STREAM_URL = 'https://stream.wikimedia.org/v2/stream/recentchange'
-setup_logging() # Sets up the logging module defined in /shared/logging
+ES_HOST = 'http://localhost:9200'
+ES_LOG_INDEX = 'wikimedia-logs'
+ES_EVENT_INDEX = 'wikimedia-edits'
 
+# Elasticsearch client
+es = Elasticsearch(ES_HOST)
+
+# Logging setup
+logger = logging.getLogger("wikimedia-ingest")
+logger.setLevel(logging.INFO)
+
+# Elasticsearch handler for script logs
+class ElasticsearchHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = {
+            "message": self.format(record),
+            "level": record.levelname,
+            "timestamp": datetime.utcnow()
+        }
+        try:
+            es.index(index=ES_LOG_INDEX, document=log_entry)
+        except Exception as e:
+            print(f"Failed to log to Elasticsearch: {e}")
+
+es_handler = ElasticsearchHandler()
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+es_handler.setFormatter(formatter)
+logger.addHandler(es_handler)
+
+# --- Functions ---
 def get_wikimedia_stream_client():
-    """Returns a client for the Wikimedia SSE stream."""
-    # The sseclient library handles the request internally.
-    # We pass the URL string directly to it.
-    # We can also pass requests-compatible arguments like headers or timeout.
     try:
         client = sseclient.SSEClient(WIKIMEDIA_STREAM_URL, timeout=5)
-        print(f"Successfully connected to Wikimedia stream at {WIKIMEDIA_STREAM_URL}")
+        logger.info(f"Connected to Wikimedia stream at {WIKIMEDIA_STREAM_URL}")
         return client
     except requests.exceptions.RequestException as e:
-        # The exception will be raised by the SSEClient constructor if it can't connect.
-        print(f"Error connecting to Wikimedia stream: {e}")
-        print("Please check the URL and your internet connection.")
-        exit(1) # Exit if the connection fails
-
-    return sseclient.SSEClient(response)
+        logger.error(f"Error connecting to Wikimedia stream: {e}", exc_info=True)
+        exit(1)
 
 def create_kafka_producer():
-    """Creates and returns a Kafka producer."""
-    return KafkaProducer(
-        bootstrap_servers=[KAFKA_BROKER],
-        api_version=(0, 10, 1), # Specify API version for broader compatibility
-        value_serializer=lambda v: json.dumps(v).encode('utf-8')
-    )
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=[KAFKA_BROKER],
+            api_version=(0, 10, 1),
+            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+        )
+        logger.info("Kafka producer created successfully.")
+        return producer
+    except Exception as e:
+        logger.error(f"Failed to create Kafka producer: {e}", exc_info=True)
+        exit(1)
 
-# In services/ingestion/ingest.py
+def log_event_to_es(change: dict):
+    """Log the actual Wikimedia edit event to Elasticsearch."""
+    try:
+        doc = {
+            "title": change.get("title"),
+            "user": change.get("user"),
+            "namespace": change.get("namespace"),
+            "type": change.get("type"),
+            "timestamp": change.get("timestamp"),
+            "meta": change  # store full event
+        }
+        es.index(index=ES_EVENT_INDEX, document=doc)
+    except Exception as e:
+        logger.error(f"Failed to log event to Elasticsearch: {e}", exc_info=True)
 
+# --- Main ---
 def main():
-    """
-    Connects to the Wikimedia stream and pushes events to Kafka.
-    """
-    logging.info("Script execution started.")
-    
-    # --- TRACER 1: KAFKA PRODUCER ---
-    logging.info("Attempting to create Kafka producer...")
-    try:
-        producer = create_kafka_producer()
-        logging.info("Kafka producer created successfully.")
-    except Exception as e:
-        logging.error(f"Failed to create Kafka producer: {e}", exc_info=True)
-        return # Exit if we can't create the producer
+    logger.info("Script execution started.")
+    producer = create_kafka_producer()
+    client = get_wikimedia_stream_client()
 
-    # --- TRACER 2: WIKIMEDIA CLIENT ---
-    logging.info("Attempting to create Wikimedia stream client...")
-    try:
-        client = get_wikimedia_stream_client()
-        logging.info("Wikimedia stream client created successfully.")
-    except Exception as e:
-        logging.error(f"Failed to create Wikimedia stream client: {e}", exc_info=True)
-        return # Exit if we can't create the client
-
-    # --- TRACER 3: EVENT LOOP ---
-    logging.info("Initialization complete. Starting event loop...")
+    logger.info("Initialization complete. Starting event loop...")
     for event in client:
         if event.event == 'message':
             try:
-                logging.debug(f"Received message data: {event.data}")
                 change = json.loads(event.data)
                 if change.get('type') == 'edit' and change.get('namespace') == 0:
-                    logging.info(f"Publishing edit for page: {change.get('title')}")
+                    logger.info(f"Publishing edit for page: {change.get('title')}")
                     producer.send(KAFKA_TOPIC, change)
+                    log_event_to_es(change)
             except json.JSONDecodeError:
-                logging.warning(f"Could not decode JSON: {event.data}")
+                logger.warning(f"Could not decode JSON: {event.data}")
             except Exception as e:
-                logging.error(f"An unhandled error occurred: {e}", exc_info=True)
-                
+                logger.error(f"Unhandled error occurred: {e}", exc_info=True)
+
 if __name__ == "__main__":
     main()
